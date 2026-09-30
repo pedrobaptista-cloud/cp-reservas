@@ -1,0 +1,90 @@
+name: Reservar CP
+
+on:
+  workflow_dispatch:
+    inputs:
+      sentido:
+        description: "Sentido"
+        type: choice
+        options:
+          - Lisboa para Coimbra
+          - Coimbra para Lisboa
+        default: Lisboa para Coimbra
+      data:
+        description: "Dia"
+        type: choice
+        options:
+          - hoje
+          - amanhã
+          - depois de amanhã
+        default: amanhã
+      hora:
+        description: "Hora do comboio (ex: 09:30)"
+        type: string
+        required: true
+      teste:
+        description: "Modo teste (não reserva; só verifica uma vez)"
+        type: boolean
+        default: true
+      data_exata:
+        description: "Opcional: outro dia, no formato AAAA-MM-DD"
+        type: string
+        required: false
+      continuacao:
+        description: "Não mexer"
+        type: boolean
+        default: false
+
+concurrency:
+  group: reservar-${{ inputs.sentido }}-${{ inputs.data_exata || inputs.data }}-${{ inputs.hora }}-${{ inputs.teste }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  reservar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Vigiar e reservar
+        id: reservar
+        run: python reservar.py
+        env:
+          CP_EMAIL: ${{ secrets.CP_EMAIL }}
+          CP_PASSWORD: ${{ secrets.CP_PASSWORD }}
+          CP_INFO_ADICIONAL: ${{ secrets.CP_INFO_ADICIONAL }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TRIP_SENTIDO: ${{ inputs.sentido }}
+          TRIP_DATA: ${{ inputs.data }}
+          TRIP_DATA_EXATA: ${{ inputs.data_exata }}
+          TRIP_HORA: ${{ inputs.hora }}
+          TRIP_TESTE: ${{ inputs.teste }}
+          TRIP_CONTINUACAO: ${{ inputs.continuacao }}
+
+      - name: Continuar a vigiar numa nova execução
+        if: steps.reservar.outputs.continuar == 'true'
+        run: |
+          gh workflow run reservar.yml \
+            -f sentido="$SENTIDO" \
+            -f data_exata="$DATA_FINAL" \
+            -f hora="$HORA_FINAL" \
+            -f teste=false \
+            -f continuacao=true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENTIDO: ${{ inputs.sentido }}
+          DATA_FINAL: ${{ steps.reservar.outputs.data_final }}
+          HORA_FINAL: ${{ steps.reservar.outputs.hora_final }}
