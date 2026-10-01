@@ -26,7 +26,7 @@ DIAS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
 MESES = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
          "agosto", "setembro", "outubro", "novembro", "dezembro"]
 
-JANELA_H = 25                   # comecar a vigiar 25h antes da partida
+JANELA_H = 24                   # comecar a vigiar 24h antes da partida (so ai o passe verde se aplica)
 LIMITE_S = 5 * 3600 + 15 * 60   # duracao maxima de cada execucao (o GitHub corta as 6h)
 INTERVALO_S = 300               # 5 minutos entre verificacoes
 
@@ -208,13 +208,28 @@ def verificar(page, cfg: dict, data: datetime, resumo: str) -> bool:
         notificar(f"TESTE: ha lugar ({resumo}). Parei antes de confirmar.")
         return True
 
-    page.get_by_role("button", name="Confirmar").click()
-    # A partir daqui NUNCA repetir: qualquer erro de espera nao pode causar uma 2a reserva.
+    # A partir daqui NUNCA repetir: qualquer erro depois do clique nao pode causar uma 2a reserva.
+    try:
+        page.get_by_role("button", name="Confirmar").click()
+    except Exception as e:
+        notificar(f"Erro ao confirmar ({resumo}, {type(e).__name__}). Verifica na app da CP; parei para nao duplicar.")
+        return True
     try:
         page.wait_for_load_state("networkidle", timeout=30000)
     except (PWTimeout, PWError):
         pass
-    notificar(f"Reserva submetida ({resumo}). Confirma na app da CP.")
+    # Dar tempo ao pedido de compra para terminar antes de o browser fechar.
+    time.sleep(20)
+    if os.environ.get("LOCAL"):
+        try:
+            page.screenshot(path="apos_confirmar.png", full_page=True)
+            print("Pagina depois de Confirmar:", page.url.split("?")[0])
+            botoes = [b.inner_text().strip().replace("\n", " ")[:40]
+                      for b in page.get_by_role("button").all() if b.is_visible()]
+            print("Botoes visiveis:", botoes)
+        except Exception as e:
+            print("Diagnostico falhou:", type(e).__name__)
+    notificar(f"Reserva feita ({resumo}). Confirma na app da CP que o bilhete apareceu.")
     return True
 
 
@@ -226,28 +241,33 @@ def vigiar(page, cfg: dict, data: datetime, inicio: float, resumo: str) -> str:
         if datetime.now(TZ) >= data:
             notificar(f"O comboio ({resumo}) ja partiu; parei de vigiar.")
             return "partiu"
+        if time.time() - inicio + INTERVALO_S > LIMITE_S:
+            return "continuar"
         try:
             if not logado:
                 login(page)
                 logado = True
             ir_para_pesquisa(page)
             ha_lugar = verificar(page, cfg, data, resumo)
-            falhas = 0
         except Exception as e:
             falhas += 1
             logado = False
             print(f"Falha {falhas}: {type(e).__name__}")
-            if falhas >= 3:
+            if teste and falhas >= 3:
                 raise
-            time.sleep(60)
+            # avisar so na 3a falha seguida e depois de hora a hora; nunca desistir
+            if falhas == 3 or (falhas > 3 and falhas % 12 == 0):
+                notificar(f"Tenho tido erros ({type(e).__name__}) a verificar {resumo}. Continuo a tentar.")
+            time.sleep(60 if falhas < 3 else INTERVALO_S)
             continue
+        if falhas >= 3:
+            notificar(f"Voltou a funcionar ({resumo}). Continuo a vigiar.")
+        falhas = 0
         if ha_lugar:
             return "feito"
         if teste:
             notificar(f"TESTE: sem lugar ({resumo}).")
             return "feito"
-        if time.time() - inicio + INTERVALO_S > LIMITE_S:
-            return "continuar"
         time.sleep(INTERVALO_S + random.randint(0, 60))
 
 
