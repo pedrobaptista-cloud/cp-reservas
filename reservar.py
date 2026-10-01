@@ -101,7 +101,7 @@ def carregar_config() -> dict:
 def login(page) -> None:
     email = os.environ["CP_EMAIL"]
     password = os.environ["CP_PASSWORD"]
-    page.goto("https://www.cp.pt/pt")
+    page.goto("https://www.cp.pt/pt", wait_until="domcontentloaded")
     try:
         page.get_by_role("button", name="Rejeitar Todos").click(timeout=5000)
     except PWTimeout:
@@ -114,12 +114,12 @@ def login(page) -> None:
     try:
         page.wait_for_url(re.compile(r"/mycp"), timeout=30000)
     except (PWTimeout, PWError):
-        page.goto("https://www.cp.pt/pt/mycp")
+        page.goto("https://www.cp.pt/pt/mycp", wait_until="domcontentloaded")
 
 
 def ir_para_pesquisa(page) -> None:
     if "/mycp" not in page.url:
-        page.goto("https://www.cp.pt/pt/mycp")
+        page.goto("https://www.cp.pt/pt/mycp", wait_until="domcontentloaded")
     page.get_by_role("tabpanel", name="Passageiros").get_by_role("link", name="Início").click()
 
 
@@ -313,6 +313,7 @@ def main() -> None:
             browser = p.chromium.launch(headless=True, slow_mo=300)
         context = browser.new_context()
         context.set_default_timeout(20000)
+        context.set_default_navigation_timeout(60000)
         page = context.new_page()
         try:
             resultado = vigiar(page, cfg, data, inicio, resumo)
