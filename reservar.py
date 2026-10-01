@@ -103,10 +103,14 @@ def login(page) -> None:
     password = os.environ["CP_PASSWORD"]
     page.goto("https://www.cp.pt/pt", wait_until="domcontentloaded")
     try:
-        page.get_by_role("button", name="Rejeitar Todos").click(timeout=5000)
+        page.wait_for_load_state("load", timeout=30000)
+    except (PWTimeout, PWError):
+        pass
+    try:
+        page.get_by_role("button", name="Rejeitar Todos").click(timeout=8000)
     except PWTimeout:
         pass
-    page.get_by_role("button", name="myCP profile").click()
+    page.get_by_role("button", name="myCP profile").click(timeout=45000)
     page.get_by_role("textbox", name="Email").fill(email)
     page.get_by_role("textbox", name="Palavra-passe").fill(password)
     page.get_by_role("button", name="Entrar agora").click()
@@ -233,6 +237,16 @@ def verificar(page, cfg: dict, data: datetime, resumo: str) -> bool:
     return True
 
 
+def diagnostico_publico(page) -> None:
+    """Escreve no registo o titulo e o inicio do texto da pagina. So usar ANTES do login."""
+    try:
+        print("Pagina:", page.url.split("?")[0], "| titulo:", page.title()[:80])
+        texto = page.locator("body").inner_text(timeout=3000)
+        print("Texto:", " ".join(texto.split())[:300])
+    except Exception as e:
+        print("Sem diagnostico:", type(e).__name__)
+
+
 def vigiar(page, cfg: dict, data: datetime, inicio: float, resumo: str) -> str:
     teste = cfg.get("dry_run", True)
     logado = False
@@ -251,6 +265,8 @@ def vigiar(page, cfg: dict, data: datetime, inicio: float, resumo: str) -> str:
             ha_lugar = verificar(page, cfg, data, resumo)
         except Exception as e:
             falhas += 1
+            if not logado:
+                diagnostico_publico(page)
             logado = False
             print(f"Falha {falhas}: {type(e).__name__}")
             if teste and falhas >= 3:
@@ -310,8 +326,18 @@ def main() -> None:
         if os.environ.get("LOCAL"):
             browser = p.chromium.launch(channel="chrome", headless=False, slow_mo=400)
         else:
-            browser = p.chromium.launch(headless=True, slow_mo=300)
-        context = browser.new_context()
+            browser = p.chromium.launch(
+                headless=True, slow_mo=300,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+        ctx_args = {}
+        if not os.environ.get("LOCAL"):
+            # esconder o "HeadlessChrome" do identificador do browser
+            ctx_args["user_agent"] = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                f"(KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
+            )
+        context = browser.new_context(**ctx_args)
         context.set_default_timeout(20000)
         context.set_default_navigation_timeout(60000)
         page = context.new_page()
