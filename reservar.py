@@ -107,6 +107,10 @@ def login(page) -> None:
     except (PWTimeout, PWError):
         pass
     try:
+        page.get_by_text("Por favor aguarde um momento").first.wait_for(state="hidden", timeout=30000)
+    except PWTimeout:
+        pass
+    try:
         page.get_by_role("button", name="Rejeitar Todos").click(timeout=8000)
     except PWTimeout:
         pass
@@ -127,6 +131,43 @@ def ir_para_pesquisa(page) -> None:
     page.get_by_role("tabpanel", name="Passageiros").get_by_role("link", name="Início").click()
 
 
+def sugestao_mais_proxima(page, caixa, opcao: str):
+    """Entre os elementos visiveis com o texto da estacao, escolhe o que esta logo abaixo do campo
+    (a lista de sugestoes), e nao um atalho de pesquisa recente noutro sitio da pagina."""
+    try:
+        cand = page.get_by_text(opcao)
+        box = caixa.bounding_box()
+        melhor, dist = None, None
+        for i in range(cand.count()):
+            el = cand.nth(i)
+            if not el.is_visible():
+                continue
+            b = el.bounding_box()
+            if not b or not box:
+                continue
+            d = b["y"] - (box["y"] + box["height"])
+            if d < -5:
+                continue  # acima do campo
+            if dist is None or d < dist:
+                melhor, dist = el, d
+        return melhor
+    except Exception:
+        return None
+
+
+def confirmar_trajeto(page, cfg: dict) -> None:
+    """Garante que a pesquisa esta mesmo no sentido pedido, antes de pesquisar."""
+    try:
+        o = page.get_by_role("textbox", name="Origem *").input_value()
+        d = page.get_by_role("textbox", name="Destino *").input_value()
+    except Exception:
+        print("Nao consegui ler os campos do trajeto; sem verificacao.")
+        return
+    print(f"Trajeto na pesquisa: {o} > {d}")
+    if cfg["origem_pesquisa"].lower() not in o.lower() or cfg["destino_pesquisa"].lower() not in d.lower():
+        raise ValueError("trajeto errado na pesquisa")
+
+
 def escolher_estacao(page, campo: str, pesquisa: str, opcao: str) -> None:
     """Escreve letra a letra (para a lista de sugestoes aparecer) e escolhe a opcao."""
     caixa = page.get_by_role("textbox", name=campo)
@@ -141,7 +182,8 @@ def escolher_estacao(page, campo: str, pesquisa: str, opcao: str) -> None:
         caixa.fill("")
         caixa.press_sequentially(pesquisa, delay=250)
         sugestao.wait_for(state="visible", timeout=12000)
-    sugestao.click()
+    alvo = sugestao_mais_proxima(page, caixa, opcao) or sugestao
+    alvo.click()
 
 
 def escolher_data(page, data: datetime) -> None:
@@ -166,6 +208,7 @@ def verificar(page, cfg: dict, data: datetime, resumo: str) -> bool:
 
     escolher_estacao(page, "Origem *", cfg["origem_pesquisa"], cfg["origem_opcao"])
     escolher_estacao(page, "Destino *", cfg["destino_pesquisa"], cfg["destino_opcao"])
+    confirmar_trajeto(page, cfg)
     escolher_data(page, data)
     page.get_by_role("button", name="Pesquisar viagens").click()
 
@@ -242,7 +285,14 @@ def diagnostico_publico(page) -> None:
     try:
         print("Pagina:", page.url.split("?")[0], "| titulo:", page.title()[:80])
         texto = page.locator("body").inner_text(timeout=3000)
-        print("Texto:", " ".join(texto.split())[:300])
+        print("Texto:", " ".join(texto.split())[:600])
+        print("Dialogos/modais:", page.locator("[role=dialog], [aria-modal=true]").count())
+        botoes = []
+        for b in page.locator("button").all()[:40]:
+            nome = (b.inner_text() or "").strip().replace("\n", " ")[:30]
+            nome = nome or (b.get_attribute("aria-label") or "")[:30]
+            botoes.append(f"{nome}|{'v' if b.is_visible() else 'h'}")
+        print("Botoes (v=visivel, h=escondido):", botoes)
     except Exception as e:
         print("Sem diagnostico:", type(e).__name__)
 
@@ -326,18 +376,8 @@ def main() -> None:
         if os.environ.get("LOCAL"):
             browser = p.chromium.launch(channel="chrome", headless=False, slow_mo=400)
         else:
-            browser = p.chromium.launch(
-                headless=True, slow_mo=300,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-        ctx_args = {}
-        if not os.environ.get("LOCAL"):
-            # esconder o "HeadlessChrome" do identificador do browser
-            ctx_args["user_agent"] = (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                f"(KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
-            )
-        context = browser.new_context(**ctx_args)
+            browser = p.chromium.launch(headless=True, slow_mo=300)
+        context = browser.new_context()
         context.set_default_timeout(20000)
         context.set_default_navigation_timeout(60000)
         page = context.new_page()
